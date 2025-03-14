@@ -102,6 +102,7 @@ async def delete_file(request: Request):
     """ Delete a file from the uploads folder """
     data = await request.json()
     file_path = data.get("filepath")
+    delete_course_dir = data.get("delete_course_dir", False)
     
     if not file_path:
         return {"error": "File path is required"}
@@ -112,30 +113,66 @@ async def delete_file(request: Request):
         parts = file_path.split('/uploads/')
         if len(parts) > 1:
             file_path = parts[1]
+        else:
+            return {"error": f"Invalid URL format: {file_path}"}
     
     # Construct the absolute path
     absolute_path = os.path.join(UPLOAD_DIR, file_path)
+    print(f"[SERVER] Attempting to delete file/dir: {absolute_path}")
     
+    # Special case: if we're deleting a course directory
+    if delete_course_dir:
+        # Extract course_id from path (assuming format course_XX/...)
+        match = re.search(r'course_(\d+)', file_path)
+        if match:
+            course_id = match.group(1)
+            course_dir = os.path.join(UPLOAD_DIR, f"course_{course_id}")
+            
+            if os.path.exists(course_dir):
+                try:
+                    print(f"[SERVER] Deleting entire course directory: {course_dir}")
+                    shutil.rmtree(course_dir)
+                    return {"success": True, "info": f"Course directory {course_dir} deleted successfully"}
+                except Exception as e:
+                    print(f"[SERVER] Error deleting course directory: {str(e)}")
+                    return {"error": f"Failed to delete course directory: {str(e)}"}
+            else:
+                print(f"[SERVER] Course directory not found: {course_dir}")
+                return {"error": f"Course directory not found: {course_dir}"}
+    
+    # Normal file deletion
     if os.path.exists(absolute_path):
         try:
-            os.remove(absolute_path)
+            if os.path.isdir(absolute_path):
+                shutil.rmtree(absolute_path)
+                print(f"[SERVER] Successfully deleted directory: {absolute_path}")
+            else:
+                os.remove(absolute_path)
+                print(f"[SERVER] Successfully deleted file: {absolute_path}")
             
+            # Handle directory cleanup more robustly
             directory = os.path.dirname(absolute_path)
-            
-            # Check if parent directory is empty and remove if it is
-            while directory != UPLOAD_DIR:
-                if os.path.exists(directory) and not os.listdir(directory):
-                    os.rmdir(directory)
-                    # Move up to parent directory
-                    directory = os.path.dirname(directory)
-                else:
-                    # If directory has content or doesn't exist, stop checking
+            while directory != UPLOAD_DIR and directory.startswith(UPLOAD_DIR):
+                try:
+                    if os.path.exists(directory) and not os.listdir(directory):
+                        print(f"[SERVER] Removing empty directory: {directory}")
+                        os.rmdir(directory)
+                        # Move up to parent directory
+                        directory = os.path.dirname(directory)
+                    else:
+                        # If directory has content or doesn't exist, stop checking
+                        break
+                except Exception as e:
+                    print(f"[SERVER] Error removing directory {directory}: {str(e)}")
                     break
                     
-            return {"info": f"File '{file_path}' deleted successfully"}
+            return {"success": True, "info": f"File '{file_path}' deleted successfully"}
         except Exception as e:
+            print(f"[SERVER] Error deleting file {absolute_path}: {str(e)}")
             return {"error": f"Failed to delete file: {str(e)}"}
-    return {"error": "File not found"}
+    else:
+        print(f"[SERVER] File not found: {absolute_path}")
+        return {"error": f"File not found: {absolute_path}"}
 
 @app.get("/healthcheck")
 def health_check():
